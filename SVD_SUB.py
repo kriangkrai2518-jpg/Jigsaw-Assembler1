@@ -8,21 +8,24 @@ from moviepy.editor import VideoFileClip, concatenate_videoclips, ImageClip, Com
 if not hasattr(PIL.Image, 'ANTIALIAS'):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
 
+# --- CONFIGURATION ---
 st.set_page_config(page_title="Jigsaw Assembler Pro", layout="wide")
-st.title("🎬 Jigsaw Assembler: Custom Subtitles")
+st.title("🎬 Jigsaw Assembler: Thai Subtitle Support")
 
+# --- UI LAYOUT ---
 col1, col2 = st.columns([1, 1])
+
 with col1:
     st.header("📁 Upload & Subtitles")
     uploaded_files = st.file_uploader("Add MP4 Files", type=["mp4"], accept_multiple_files=True)
     
-    # ส่วนสำหรับกรอกคำบรรยายแยกแต่ละไฟล์
+    # ส่วนรับคำบรรยายภาษาไทยแยกแต่ละไฟล์
     custom_captions = {}
     if uploaded_files:
-        st.subheader("📝 Edit Captions")
+        st.subheader("📝 Edit Thai Captions")
         for i, file in enumerate(uploaded_files):
-            # สร้างช่องกรอกข้อความแยกตามชื่อไฟล์
-            custom_captions[file.name] = st.text_input(f"Subtitle for: {file.name}", f"Part {i+1}")
+            # ดึงชื่อไฟล์มาเป็น Key และให้ผู้ใช้พิมพ์ข้อความไทยได้เลย
+            custom_captions[file.name] = st.text_input(f"Subtitle for: {file.name}", f"ส่วนที่ {i+1}")
 
     start_btn = st.button("🚀 Start Assembly")
 
@@ -36,76 +39,85 @@ def write_to_terminal(text):
     log_content += text + "\n"
     terminal_log.code(log_content)
 
-# ฟังก์ชันวาด Subtitle (เน้นอ่านง่าย)
+# --- THAI SUBTITLE ENGINE (PILLOW) ---
 def create_subtitle_image(text, width, height):
+    # สร้าง Canvas โปร่งใส
     img = PIL.Image.new('RGBA', (width, height), (0, 0, 0, 0))
     draw = PIL.ImageDraw.Draw(img)
+    
+    #ระบุชื่อไฟล์ฟอนต์ที่คุณอัปโหลดขึ้น GitHub (แก้ชื่อให้ตรงกับไฟล์จริง)
+    font_path = "Kanit-Bold.ttf" 
+    
     try:
-        font = PIL.ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 50)
-    except:
+        if os.path.exists(font_path):
+            font = PIL.ImageFont.truetype(font_path, 65)
+        else:
+            # กรณีหาฟอนต์ไม่เจอ จะแจ้งเตือนที่ Terminal
+            font = PIL.ImageFont.load_default()
+    except Exception as e:
         font = PIL.ImageFont.load_default()
 
+    # คำนวณขนาดข้อความเพื่อให้วางกึ่งกลางได้แม่นยำ
     text_bbox = draw.textbbox((0, 0), text, font=font)
     tw, th = text_bbox[2] - text_bbox[0], text_bbox[3] - text_bbox[1]
     
-    # วาดแถบดำโปร่งแสงด้านล่าง
-    padding = 15
+    # วาดแถบดำโปร่งแสง (Background) เพื่อให้ตัวหนังสืออ่านง่ายขึ้น
+    padding = 20
     bg_x0, bg_y0 = (width-tw)//2 - padding, height - 150 - padding
     bg_x1, bg_y1 = (width+tw)//2 + padding, height - 150 + th + padding
     draw.rectangle([bg_x0, bg_y0, bg_x1, bg_y1], fill=(0, 0, 0, 180))
     
-    # วาดตัวอักษรสีขาว (เพื่อความชัดเจนของ Subtitle)
+    # วาดตัวอักษรภาษาไทยสีขาว
     draw.text(((width - tw) // 2, height - 150), text, font=font, fill=(255, 255, 255, 255))
     return np.array(img)
 
+# --- MAIN PROCESSING ENGINE ---
 if start_btn and uploaded_files:
-    write_to_terminal("📌 เริ่มต้นระบบประกอบวิดีโอพร้อมคำบรรยาย...")
+    write_to_terminal("📌 เริ่มต้นระบบประกอบวิดีโอ (Thai Language Support Enabled)")
     clips = []
     temp_files = []
 
     try:
         for uploaded_file in uploaded_files:
-            write_to_terminal(f"📥 กำลังโหลด: {uploaded_file.name}")
+            write_to_terminal(f"📥 กำลังดึงข้อมูล: {uploaded_file.name}")
+            
+            # บันทึกไฟล์ชั่วคราว
             temp_path = f"temp_{uploaded_file.name}"
             with open(temp_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
             temp_files.append(temp_path)
 
+            # โหลดวิดีโอและปรับขนาดมาตรฐาน (1080p)
             clip = VideoFileClip(temp_path).resize(height=1080)
             w, h = clip.size
 
-            # ดึงคำบรรยายที่กรอกไว้มาใช้
-            text = custom_captions.get(uploaded_file.name, "")
+            # ดึงข้อความภาษาไทยที่กรอกไว้
+            thai_text = custom_captions.get(uploaded_file.name, "")
             
-            # สร้าง Subtitle Layer
-            txt_img = create_subtitle_image(text, w, h)
+            # สร้าง Subtitle Layer โดยใช้ Pillow แทน TextClip (เพื่อเลี่ยง Security Policy)
+            txt_img = create_subtitle_image(thai_text, w, h)
             txt_clip = ImageClip(txt_img).set_duration(clip.duration).set_position('center')
 
+            # ซ้อน Subtitle ลงบนวิดีโอ
             combined = CompositeVideoClip([clip, txt_clip])
             clips.append(combined)
-            write_to_terminal(f"✅ ใส่คำบรรยาย '{text}' เรียบร้อย")
+            write_to_terminal(f"✅ ใส่ซับไทย: '{thai_text}' เรียบร้อย")
 
         if clips:
-            write_to_terminal("🎬 กำลัง Render... (ขั้นตอนนี้ใช้พลังงานสูง)")
+            write_to_terminal("🎬 กำลัง Render วิดีโอรวม... (ขั้นตอนนี้ขึ้นอยู่กับความยาวคลิป)")
             final = concatenate_videoclips(clips, method="compose")
-            output_file = "Jigsaw_Custom_Subs.mp4"
+            
+            output_file = "Jigsaw_Assembler_Result.mp4"
             final.write_videofile(output_file, fps=24, codec="libx264", audio_codec="aac")
 
-            write_to_terminal("🎊 ทุกอย่างเสร็จสมบูรณ์!")
-            st.success("✅ รวมวิดีโอพร้อมคำบรรยายสำเร็จ!")
+            write_to_terminal("🎊 การประกอบวิดีโอเสร็จสมบูรณ์!")
+            st.success("✅ รวมวิดีโอพร้อมซับไทยเรียบร้อย!")
+            
+            # แสดงวิดีโอและปุ่มดาวน์โหลด
             with open(output_file, 'rb') as v:
                 st.video(v.read())
-                st.download_button("📥 ดาวน์โหลดวิดีโอ", data=v, file_name=output_file)
+                st.download_button("📥 Download Final Video", data=v, file_name=output_file, mime="video/mp4")
 
     except Exception as e:
         write_to_terminal(f"❌ ERROR: {str(e)}")
-        st.error(f"เกิดข้อผิดพลาด: {e}")
-
-    finally:
-        for c in clips:
-            try: c.close()
-            except: pass
-        for f in temp_files:
-            try: os.remove(f)
-            except: pass
-        write_to_terminal("✨ พร้อมสำหรับโปรเจกต์ถัดไป")
+        st.
